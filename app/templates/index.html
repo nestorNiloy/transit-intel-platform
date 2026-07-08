@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Transit Intelligence · Regionalverkehr Norddeutschland</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --void: #0A0E12;
+    --panel: #12181F;
+    --panel-border: #232B33;
+    --amber: #F5A623;
+    --green: #34D399;
+    --red: #F0475B;
+    --slate: #8B98A5;
+    --bright: #E7ECF0;
+  }
+
+  * { font-family: 'IBM Plex Sans', sans-serif; }
+  .font-data { font-family: 'IBM Plex Mono', monospace; }
+
+  body { background-color: var(--void); }
+
+  .panel {
+    background-color: var(--panel);
+    border: 1px solid var(--panel-border);
+  }
+
+  .kpi-value {
+    transition: opacity 120ms ease, filter 120ms ease, transform 120ms ease;
+  }
+  .kpi-value.is-flipping {
+    opacity: 0;
+    filter: blur(2px);
+    transform: translateY(-6px) scaleY(0.85);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .kpi-value, .kpi-value.is-flipping {
+      transition: none !important;
+      opacity: 1 !important;
+      filter: none !important;
+      transform: none !important;
+    }
+  }
+
+  select.control:focus, button:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar { height: 8px; width: 8px; }
+  ::-webkit-scrollbar-track { background: var(--panel); }
+  ::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 4px; }
+
+  .badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    display: inline-block;
+    letter-spacing: 0.02em;
+  }
+  .badge-green { background: rgba(52, 211, 153, 0.12); color: var(--green); border: 1px solid rgba(52, 211, 153, 0.35); }
+  .badge-yellow { background: rgba(245, 166, 35, 0.12); color: var(--amber); border: 1px solid rgba(245, 166, 35, 0.35); }
+  .badge-red { background: rgba(240, 71, 91, 0.12); color: var(--red); border: 1px solid rgba(240, 71, 91, 0.35); }
+
+  .row-divider { border-bottom: 1px solid var(--panel-border); }
+  .row-divider:last-child { border-bottom: none; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body class="text-[#E7ECF0] min-h-screen pb-16">
+
+  <!-- Header -->
+  <header class="border-b border-[#232B33] bg-[#0A0E12]/95 backdrop-blur sticky top-0 z-10">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <p class="font-data text-[11px] tracking-[0.2em] text-[#8B98A5] uppercase">Regionalverkehr · Norddeutschland</p>
+        <h1 class="text-2xl font-semibold text-[#E7ECF0] mt-0.5">Transit Intelligence</h1>
+      </div>
+      <div class="flex items-center gap-3">
+        <label for="region-select" class="font-data text-[11px] uppercase tracking-wide text-[#8B98A5]">Region</label>
+        <select id="region-select" class="control bg-[#12181F] border border-[#232B33] text-[#E7ECF0] rounded-md px-3 py-2 text-sm font-data">
+          <option value="" {% if not selected_region %}selected{% endif %}>All regions</option>
+          {% for r in regions %}
+          <option value="{{ r }}" {% if selected_region == r %}selected{% endif %}>{{ r }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 mt-8 space-y-8">
+
+    <!-- KPI cards -->
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="panel rounded-lg p-5 border-l-4" style="border-left-color: var(--amber);">
+        <p class="font-data text-[11px] uppercase tracking-wide text-[#8B98A5]">Ø Global Delay</p>
+        <p id="kpi-avg-delay" class="kpi-value font-data text-3xl font-semibold mt-2 text-[#E7ECF0]">{{ kpis.average_delay_minutes }}<span class="text-base text-[#8B98A5] ml-1">min</span></p>
+      </div>
+
+      <div class="panel rounded-lg p-5 border-l-4" style="border-left-color: var(--green);">
+        <p class="font-data text-[11px] uppercase tracking-wide text-[#8B98A5]">Most Reliable Route (30d)</p>
+        <p id="kpi-best-route" class="kpi-value font-data text-lg font-semibold mt-2 text-[#E7ECF0] leading-snug">
+          {% if kpis.best_route %}{{ kpis.best_route.origin_station }} → {{ kpis.best_route.destination_station }}
+          <span class="block text-sm text-[#34D399] mt-1">{{ kpis.best_route.on_time_rate_pct }}% on-time</span>
+          {% else %}<span class="text-[#8B98A5] text-sm">Not enough data yet</span>{% endif %}
+        </p>
+      </div>
+
+      <div class="panel rounded-lg p-5 border-l-4" style="border-left-color: var(--red);">
+        <p class="font-data text-[11px] uppercase tracking-wide text-[#8B98A5]">Worst Performing Route (30d)</p>
+        <p id="kpi-worst-route" class="kpi-value font-data text-lg font-semibold mt-2 text-[#E7ECF0] leading-snug">
+          {% if kpis.same_route_only %}
+          <span class="text-[#8B98A5] text-sm font-sans normal-case tracking-normal">Only one route with enough trips in this window — same as "most reliable".</span>
+          {% elif kpis.worst_route %}{{ kpis.worst_route.origin_station }} → {{ kpis.worst_route.destination_station }}
+          <span class="block text-sm text-[#F0475B] mt-1">{{ kpis.worst_route.on_time_rate_pct }}% on-time</span>
+          {% else %}<span class="text-[#8B98A5] text-sm">Not enough data yet</span>{% endif %}
+        </p>
+      </div>
+
+      <div class="panel rounded-lg p-5 border-l-4" style="border-left-color: var(--amber);">
+        <p class="font-data text-[11px] uppercase tracking-wide text-[#8B98A5]">Peak Congestion Window</p>
+        <p id="kpi-peak-window" class="kpi-value font-data text-2xl font-semibold mt-2 text-[#E7ECF0]">
+          {% if kpis.peak_congestion_hour is not none %}{{ "%02d"|format(kpis.peak_congestion_hour) }}:00
+          <span class="block text-sm text-[#8B98A5] mt-1 font-sans normal-case tracking-normal">{{ kpis.peak_congestion_slot|replace("_", " ")|title }}</span>
+          {% else %}<span class="text-[#8B98A5] text-sm">Not enough data yet</span>{% endif %}
+        </p>
+      </div>
+    </section>
+
+    <!-- Body: table + chart -->
+    <section class="grid grid-cols-1 lg:grid-cols-5 gap-6">
+
+      <!-- Station reliability table -->
+      <div class="panel rounded-lg lg:col-span-2 overflow-hidden">
+        <div class="px-5 py-4 border-b border-[#232B33]">
+          <h2 class="font-data text-[11px] uppercase tracking-wide text-[#8B98A5]">Station Reliability Standings</h2>
+        </div>
+        <div class="overflow-x-auto max-h-[420px]">
+          <table class="w-full text-sm">
+            <thead class="sticky top-0 bg-[#12181F]">
+              <tr class="text-left text-[#8B98A5] font-data text-[11px] uppercase">
+                <th class="px-5 py-2">Station</th>
+                <th class="px-3 py-2 text-right">Trips</th>
+                <th class="px-3 py-2 text-right">Ø Delay</th>
+                <th class="px-3 py-2 text-right pr-5">Reliability</th>
+              </tr>
+            </thead>
+            <tbody id="stations-tbody">
+              {% for s in stations %}
+              <tr class="row-divider hover:bg-white/[0.02]">
+                <td class="px-5 py-2.5">{{ s.station_name }}</td>
+                <td class="px-3 py-2.5 text-right font-data">{{ s.total_tracked_trips }}</td>
+                <td class="px-3 py-2.5 text-right font-data">{{ s.average_delay_minutes }} min</td>
+                <td class="px-3 py-2.5 text-right pr-5">
+                  <span class="badge {% if s.reliability_score > 90 %}badge-green{% elif s.reliability_score >= 75 %}badge-yellow{% else %}badge-red{% endif %}">{{ s.reliability_score }}%</span>
+                </td>
+              </tr>
+              {% else %}
+              <tr><td colspan="4" class="px-5 py-6 text-center text-[#8B98A5]">No stations yet — trigger an ingest.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Hourly delay chart -->
+      <div class="panel rounded-lg lg:col-span-3 p-5">
+        <h2 class="font-data text-[11px] uppercase tracking-wide text-[#8B98A5] mb-4">Temporal Delays · Avg. Delay by Hour (0–23)</h2>
+        <div class="h-[380px]">
+          <canvas id="hourly-chart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <footer class="text-center text-[11px] font-data text-[#8B98A5] pt-6">
+      On-time threshold: ≤5 min · Peak windows: 06–09 &amp; 17–20 · Reliability: green &gt;90%, yellow 75–90%, red &lt;75%
+    </footer>
+  </main>
+
+<script>
+  const COLORS = { amber: '#F5A623', green: '#34D399', red: '#F0475B', slate: '#8B98A5', grid: '#232B33', bright: '#E7ECF0' };
+
+  const initialHourly = {{ hourly | tojson }};
+
+  function reliabilityBadgeClass(score) {
+    if (score > 90) return 'badge-green';
+    if (score >= 75) return 'badge-yellow';
+    return 'badge-red';
+  }
+
+  function flipUpdate(el, renderFn) {
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion) { renderFn(); return; }
+    el.classList.add('is-flipping');
+    setTimeout(() => {
+      renderFn();
+      el.classList.remove('is-flipping');
+    }, 120);
+  }
+
+  function renderKpis(kpis) {
+    flipUpdate(document.getElementById('kpi-avg-delay'), () => {
+      document.getElementById('kpi-avg-delay').innerHTML =
+        `${kpis.average_delay_minutes}<span class="text-base text-[#8B98A5] ml-1">min</span>`;
+    });
+
+    flipUpdate(document.getElementById('kpi-best-route'), () => {
+      const el = document.getElementById('kpi-best-route');
+      el.innerHTML = kpis.best_route
+        ? `${kpis.best_route.origin_station} → ${kpis.best_route.destination_station}
+           <span class="block text-sm text-[#34D399] mt-1">${kpis.best_route.on_time_rate_pct}% on-time</span>`
+        : `<span class="text-[#8B98A5] text-sm">Not enough data yet</span>`;
+    });
+
+    flipUpdate(document.getElementById('kpi-worst-route'), () => {
+      const el = document.getElementById('kpi-worst-route');
+      if (kpis.same_route_only) {
+        el.innerHTML = `<span class="text-[#8B98A5] text-sm font-sans normal-case tracking-normal">Only one route with enough trips in this window — same as "most reliable".</span>`;
+      } else if (kpis.worst_route) {
+        el.innerHTML = `${kpis.worst_route.origin_station} → ${kpis.worst_route.destination_station}
+           <span class="block text-sm text-[#F0475B] mt-1">${kpis.worst_route.on_time_rate_pct}% on-time</span>`;
+      } else {
+        el.innerHTML = `<span class="text-[#8B98A5] text-sm">Not enough data yet</span>`;
+      }
+    });
+
+    flipUpdate(document.getElementById('kpi-peak-window'), () => {
+      const el = document.getElementById('kpi-peak-window');
+      if (kpis.peak_congestion_hour !== null && kpis.peak_congestion_hour !== undefined) {
+        const hh = String(kpis.peak_congestion_hour).padStart(2, '0');
+        const slot = (kpis.peak_congestion_slot || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        el.innerHTML = `${hh}:00<span class="block text-sm text-[#8B98A5] mt-1 font-sans normal-case tracking-normal">${slot}</span>`;
+      } else {
+        el.innerHTML = `<span class="text-[#8B98A5] text-sm">Not enough data yet</span>`;
+      }
+    });
+  }
+
+  function renderStations(stations) {
+    const tbody = document.getElementById('stations-tbody');
+    if (!stations.length) {
+      tbody.innerHTML = `<tr><td colspan="4" class="px-5 py-6 text-center text-[#8B98A5]">No stations for this region yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = stations.map(s => `
+      <tr class="row-divider hover:bg-white/[0.02]">
+        <td class="px-5 py-2.5">${s.station_name}</td>
+        <td class="px-3 py-2.5 text-right font-data">${s.total_tracked_trips}</td>
+        <td class="px-3 py-2.5 text-right font-data">${s.average_delay_minutes} min</td>
+        <td class="px-3 py-2.5 text-right pr-5"><span class="badge ${reliabilityBadgeClass(s.reliability_score)}">${s.reliability_score}%</span></td>
+      </tr>
+    `).join('');
+  }
+
+  let hourlyChart;
+  function renderChart(hourly) {
+    const labels = hourly.map(h => `${String(h.hour_of_day).padStart(2, '0')}:00`);
+    const values = hourly.map(h => Math.round((h.average_delay_seconds / 60) * 10) / 10);
+    const peakSet = new Set(['morning_peak', 'evening_peak']);
+    const barColors = hourly.map(h => peakSet.has(h.congestion_slot) ? COLORS.red : COLORS.amber);
+
+    if (hourlyChart) {
+      hourlyChart.data.labels = labels;
+      hourlyChart.data.datasets[0].data = values;
+      hourlyChart.data.datasets[0].backgroundColor = barColors;
+      hourlyChart.update();
+      return;
+    }
+
+    const ctx = document.getElementById('hourly-chart');
+    hourlyChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Avg delay (min)',
+          data: values,
+          backgroundColor: barColors,
+          borderRadius: 3,
+          maxBarThickness: 22,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: COLORS.grid }, ticks: { color: COLORS.slate, font: { family: 'IBM Plex Mono', size: 10 } } },
+          y: { grid: { color: COLORS.grid }, ticks: { color: COLORS.slate, font: { family: 'IBM Plex Mono', size: 10 } }, beginAtZero: true },
+        },
+      },
+    });
+  }
+
+  async function refreshDashboard(region) {
+    const qs = region ? `?region=${encodeURIComponent(region)}` : '';
+    const [kpis, stations, hourly] = await Promise.all([
+      fetch(`/api/dashboard/kpis${qs}`).then(r => r.json()),
+      fetch(`/api/stations${qs}`).then(r => r.json()),
+      fetch(`/api/analytics/hourly-congestion${qs}`).then(r => r.json()),
+    ]);
+    renderKpis(kpis);
+    renderStations(stations);
+    renderChart(hourly);
+  }
+
+  renderChart(initialHourly);
+
+  document.getElementById('region-select').addEventListener('change', (e) => {
+    refreshDashboard(e.target.value);
+  });
+</script>
+</body>
+</html>
