@@ -12,7 +12,8 @@ An analytics platform for exploring regional rail reliability and delay patterns
 - Semester-ticket route view restricted to regional services (RE, RB, S-Bahn)
 - Server-rendered dashboard with Jinja2, Tailwind CSS, and Chart.js
 - External departure-data adapter for the community db.transport.rest HAFAS API
-- Input validation, bounded HTTP retries, structured API error responses, and smoke/unit test scripts
+- Input validation, bounded HTTP retries, structured API error responses, and automated unit/API smoke tests
+- Admin-key protection for ingestion endpoints in production; public read-only dashboard and analytics
 
 ## Architecture
 
@@ -64,7 +65,7 @@ flowchart LR
 | Schemas | Pydantic v2 | Request and response validation |
 | External data | httpx, db.transport.rest | Async HTTP client and HAFAS departure retrieval |
 | Dashboard | Jinja2, Tailwind CSS CDN, Chart.js | Server-rendered dashboard and charts |
-| Tests | FastAPI TestClient, mocked HAFAS payloads | Endpoint smoke checks and normalization tests |
+| Tests | pytest, FastAPI TestClient, mocked HAFAS payloads | Unit tests, aggregate consistency checks, and isolated endpoint smoke tests |
 
 ## Dashboard
 
@@ -90,8 +91,11 @@ The batch endpoint can also create more sample records:
 ~~~bash
 curl -X POST http://localhost:8000/api/ingest/batch \
   -H "Content-Type: application/json" \
+  -H "X-Admin-API-Key: $ADMIN_API_KEY" \
   -d '{"num_records": 500, "reset": false}'
 ~~~
+
+In local development, ingestion is available without a key unless you configure `ADMIN_API_KEY`. In production, set `ENVIRONMENT=production` and configure a strong `ADMIN_API_KEY` secret in the host dashboard. Both ingestion endpoints require the `X-Admin-API-Key` header. If the key is missing from a production deployment, ingestion is disabled rather than left public.
 
 **Caution:** reset=true deletes the existing route-delay observations before generating replacement sample data. Do not call it against a dataset you want to preserve.
 
@@ -104,6 +108,7 @@ Trigger an ingestion run while the API is running:
 ~~~bash
 curl -X POST http://localhost:8000/api/ingest/live \
   -H "Content-Type: application/json" \
+  -H "X-Admin-API-Key: $ADMIN_API_KEY" \
   -d '{"duration_minutes": 180}'
 ~~~
 
@@ -203,41 +208,39 @@ Open:
 - API documentation: http://127.0.0.1:8000/docs
 - Health check: http://127.0.0.1:8000/api/health
 
-The SQLite database file is created in the process working directory as transit_intel.db. Run Uvicorn from the repository root.
+The SQLite database file defaults to the process working directory as `transit_intel.db`. Run Uvicorn from the repository root. The database URL can be overridden with the `DATABASE_URL` environment variable. The smoke test creates a separate temporary SQLite database and never touches your normal local database.
 
 ### Tests
 
 ~~~bash
-python scripts/test_services.py
+python -m pip install pytest
+python -m pytest scripts/test_services.py tests -q
 python scripts/smoke_test.py
 ~~~
 
-The service tests use mocked HAFAS-shaped payloads and do not need a network connection. The smoke test exercises the API and dashboard through FastAPI's test client. The current scripts are manual checks; a CI workflow is a recommended next engineering improvement.
+The service tests use mocked HAFAS-shaped payloads and do not need a network connection. The aggregate tests use an in-memory SQLite database. The API smoke test uses its own temporary SQLite file and verifies that ingestion rejects missing credentials. GitHub Actions runs these checks for pushes to `main` and pull requests targeting `main`.
 
 ## Deployment
 
-### Recommended simple deployment: Render Web Service
+### Free portfolio deployment: Render Web Service
 
-This is a conventional FastAPI server, so deploy it as a **Render Web Service**, not as a static site. Suggested settings:
+The repository includes a `render.yaml` Blueprint for a **free Render Web Service**. In Render, create a new Blueprint deployment and select this GitHub repository. Review the service settings before applying them.
 
 | Setting | Value |
 |---|---|
 | Runtime | Python |
-| Branch | main |
-| Root directory | Leave blank |
-| Build command | pip install -r requirements.txt |
-| Start command | uvicorn app.main:app --host 0.0.0.0 --port $PORT |
-| Health check path | /api/health |
+| Plan | Free |
+| Build command | `pip install -r requirements.txt` |
+| Start command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| Health check path | `/api/health` |
+| Environment | `ENVIRONMENT=production` |
+| Secret | `ADMIN_API_KEY` (set a long, random value in Render) |
 
-For an always-on public demo, choose a paid Render web-service instance: Render's free web services spin down after 15 minutes without traffic and can take about a minute to wake. Paid instances do not spin down. See [Render's free-instance limitations](https://render.com/docs/free) and [current compute pricing](https://render.com/pricing).
+The public dashboard and read-only analytics endpoints do not require a key. The two ingestion endpoints require the secret in an `X-Admin-API-Key` request header. Keep the key private; do not commit it to GitHub or put it in frontend JavaScript. If the key is not configured, production ingestion stays disabled.
 
-**SQLite persistence choice:**
+**Free-tier SQLite limitation:** Render Free does not provide a persistent disk. The SQLite database is stored on the service's ephemeral filesystem and can be lost when the service is restarted, redeployed, or replaced. On a fresh/empty database, the application recreates its synthetic demo dataset at startup. Manually ingested live records are not guaranteed to survive. The free web service can also spin down after inactivity and take about a minute to wake. This setup is suitable for a no-cost portfolio demonstration, not durable data storage or always-on availability.
 
-- For a disposable portfolio demo, the app can recreate its synthetic dataset when the service starts. The dashboard will work, but manually ingested records may be lost when the host replaces its filesystem.
-- To preserve the SQLite file on Render, use a paid service with a persistent disk and configure the database file path to live under the disk's mount directory. The current code uses a relative SQLite URL, so this requires a small configuration change before attaching a disk.
-- If the project later needs durable, portable storage, migrate the database to managed PostgreSQL (for example, Neon) and configure the connection URL. Neon is a database provider, not an application host.
-
-A paid web service reduces cold starts; it is not a guarantee of zero downtime. The external HAFAS community API can also be unavailable independently of this application.
+The application reads its database URL from `DATABASE_URL`; without that variable it uses the local SQLite file `./transit_intel.db`. Do not configure a paid database or persistent disk for this free deployment.
 
 ### Why not Vercel for this deployment?
 
@@ -245,20 +248,19 @@ The current application is a conventional long-running FastAPI web service with 
 
 ## Current limitations and next improvements
 
-- SQLite currently uses a local relative file path. On hosts with ephemeral filesystems, data does not survive service replacement/redeploy.
+- SQLite uses a local file selected by `DATABASE_URL` (default `./transit_intel.db`). Render Free has an ephemeral filesystem, so stored observations may be lost on restart/redeploy; startup recreates only synthetic demo data.
 - Live HAFAS ingestion is manual; there is no scheduled collection or freshness indicator.
 - Ingestion work uses in-process background tasks. A process restart can interrupt a job, and the returned job ID cannot currently be queried for progress or outcome.
+- Render Free may spin down after inactivity; the first request after sleep can have a cold-start delay.
 - External HAFAS data is best-effort and community-provided; missing or stale upstream data can affect results.
-- Station aggregate rows are derived from route logs. Aggregate refresh currently updates or inserts rows but does not remove station rows that are no longer represented in the log table.
-- Automated CI, broader database integration tests, structured logging, and ingestion observability would strengthen the project.
+- Station aggregates are rebuilt from current origin-station observations, including removal of obsolete station rows.
+- CI and focused aggregate tests are now included. Broader ingestion integration tests, structured logging, and durable job observability remain future improvements.
 
 Potential next development phases:
 
-1. Make database configuration environment-driven and add a safe persistent deployment configuration.
-2. Add GitHub Actions for repeatable tests and deployment checks.
-3. Add scheduled ingestion with explicit data-freshness and failure reporting.
-4. Add GTFS-Realtime ingestion where a suitable feed is available.
-5. Explore delay prediction only after collecting a sufficiently large, representative historical dataset.
+1. Add scheduled ingestion with explicit data-freshness and failure reporting.
+2. Add GTFS-Realtime ingestion where a suitable feed is available.
+3. Explore delay prediction only after collecting a sufficiently large, representative historical dataset.
 
 ## Project structure
 
@@ -277,8 +279,12 @@ transit-intel-platform/
 │   └── static/
 ├── scripts/
 │   ├── ingest_live.py       # Manual/cron-friendly live ingestion runner
-│   ├── smoke_test.py        # API and dashboard smoke test
+│   ├── smoke_test.py        # Isolated API and dashboard smoke test
 │   └── test_services.py     # HAFAS normalization unit tests
+├── tests/
+│   └── test_data_generation.py # Data generation and aggregate regression tests
+├── .github/workflows/ci.yml # Automated tests
+├── render.yaml              # Free Render Blueprint
 ├── Procfile
 ├── requirements.txt
 └── .gitignore
