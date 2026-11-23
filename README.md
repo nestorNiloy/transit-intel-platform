@@ -13,6 +13,10 @@ An analytics platform for exploring regional rail reliability and delay patterns
 
 The public demo uses generated sample observations when its database is empty. Because it runs on Render Free with an ephemeral filesystem, the demo may need to regenerate that sample dataset after a restart or redeployment. Live HAFAS ingestion is manual and is not continuously refreshed.
 
+## Dashboard preview
+
+![Dashboard demo](dashboard-demo.gif)
+
 ## Highlights
 
 - Asynchronous REST API built with FastAPI and SQLAlchemy 2.0
