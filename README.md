@@ -4,6 +4,15 @@ An analytics platform for exploring regional rail reliability and delay patterns
 
 > **Project status:** Working portfolio project. The current dashboard starts with generated sample data. Real RE/RB departure observations can be fetched manually through the live-ingestion endpoint. Live ingestion is **not** scheduled automatically, so the dashboard should not be described as a continuously refreshed live Deutsche Bahn monitor.
 
+## Live demo
+
+- **Dashboard:** [transit-intel-platform.onrender.com](https://transit-intel-platform.onrender.com/)
+- **API health:** [ /api/health ](https://transit-intel-platform.onrender.com/api/health)
+- **Hourly delay analytics:** [ /api/analytics/hourly-congestion ](https://transit-intel-platform.onrender.com/api/analytics/hourly-congestion)
+- **Interactive API docs:** [ /docs ](https://transit-intel-platform.onrender.com/docs)
+
+The public demo uses generated sample observations when its database is empty. Because it runs on Render Free with an ephemeral filesystem, the demo may need to regenerate that sample dataset after a restart or redeployment. Live HAFAS ingestion is manual and is not continuously refreshed.
+
 ## Highlights
 
 - Asynchronous REST API built with FastAPI and SQLAlchemy 2.0
@@ -64,7 +73,7 @@ flowchart LR
 | Database | SQLite | Local relational persistence |
 | Schemas | Pydantic v2 | Request and response validation |
 | External data | httpx, db.transport.rest | Async HTTP client and HAFAS departure retrieval |
-| Dashboard | Jinja2, Tailwind CSS CDN, Chart.js | Server-rendered dashboard and charts |
+| Dashboard | Jinja2, Tailwind CSS CDN, Chart.js 4.4.4 (jsDelivr CDN) | Server-rendered dashboard and interactive charts |
 | Tests | pytest, FastAPI TestClient, mocked HAFAS payloads | Unit tests, aggregate consistency checks, and isolated endpoint smoke tests |
 
 ## Dashboard
