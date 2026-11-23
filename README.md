@@ -143,7 +143,7 @@ erDiagram
         float average_delay_minutes
         float reliability_score
     }
-    ROUTE_DELAY_LOG }o..o{ STATION_METRIC : "origin station aggregate (logical relationship)"
+    STATION_METRIC ||..o{ ROUTE_DELAY_LOG : "aggregates by origin_station (logical only)"
 ~~~
 
 - RouteDelayLog stores the granular scheduled-versus-actual departure observations used by analytics.
