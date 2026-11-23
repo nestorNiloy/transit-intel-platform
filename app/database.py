@@ -4,12 +4,13 @@ Async database engine and session management for the embedded SQLite instance
 """
 
 from collections.abc import AsyncGenerator
+import os
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .models import Base
 
-DATABASE_URL = "sqlite+aiosqlite:///./transit_intel.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./transit_intel.db")
 
 engine = create_async_engine(DATABASE_URL, echo=False, future=True)
 
