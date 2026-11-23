@@ -1,105 +1,112 @@
 """
-Standalone smoke test: exercises every endpoint against a throwaway SQLite
-DB. Run with: python scripts/smoke_test.py (from the project root).
-"""
+Standalone endpoint smoke test using an isolated temporary SQLite database.
 
+Run from the project root:
+    python scripts/smoke_test.py
+
+The test sets DATABASE_URL before importing the application, so reset=True
+can never touch the developer's normal transit_intel.db file.
+"""
 import os
 import sys
-import time
+import tempfile
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.main import app  # noqa: E402
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 def main() -> None:
-    with TestClient(app) as client:
-        # 1. Health check (auto-seed may already have populated data on startup).
-        r = client.get("/api/health")
-        assert r.status_code == 200, r.text
-        print("health (on startup):", r.json())
+    admin_key = "local-smoke-test-key"
 
-        # 2. Trigger ingestion (reset=True so counts below are deterministic).
-        r = client.post("/api/ingest/batch", json={"num_records": 500, "reset": True})
-        assert r.status_code == 202, r.text
-        print("ingest:", r.json())
+    with tempfile.TemporaryDirectory(prefix="transit-intel-smoke-") as temp_dir:
+        database_path = Path(temp_dir) / "smoke_test.db"
+        # Configure the database before app.main imports app.database.
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path.as_posix()}"
+        os.environ["ADMIN_API_KEY"] = admin_key
+        os.environ["ENVIRONMENT"] = "test"
 
-        time.sleep(1.0)
+        from fastapi.testclient import TestClient
+        from app.main import app
 
-        r = client.get("/api/health")
-        assert r.status_code == 200, r.text
-        print("health (post-ingest):", r.json())
-        assert r.json()["total_route_delay_logs"] == 500
+        with TestClient(app) as client:
+            # 1. Public health endpoint.
+            response = client.get("/api/health")
+            assert response.status_code == 200, response.text
+            print("health (on startup):", response.json())
 
-        # 3. Stations.
-        r = client.get("/api/stations")
-        assert r.status_code == 200, r.text
-        print(f"stations: {len(r.json())} rows, sample: {r.json()[:1]}")
+            # 2. Ingestion must reject missing credentials.
+            response = client.post(
+                "/api/ingest/batch",
+                json={"num_records": 500, "reset": True},
+            )
+            assert response.status_code == 401, response.text
+            print("ingestion authentication: missing key rejected")
 
-        # 4. Route delay logs with filter.
-        r = client.get("/api/routes/delays", params={"train_category": "RE", "limit": 5})
-        assert r.status_code == 200, r.text
-        print(f"routes/delays (RE): {len(r.json())} rows")
+            # 3. Authorized reset + ingestion. Starlette's TestClient waits
+            # for the response background task before returning.
+            response = client.post(
+                "/api/ingest/batch",
+                json={"num_records": 500, "reset": True},
+                headers={"X-Admin-API-Key": admin_key},
+            )
+            assert response.status_code == 202, response.text
+            print("ingest:", response.json())
 
-        # 5. Hourly congestion.
-        r = client.get("/api/analytics/hourly-congestion")
-        assert r.status_code == 200, r.text
-        print(f"hourly-congestion: {len(r.json())} buckets, sample: {r.json()[:1]}")
+            response = client.get("/api/health")
+            assert response.status_code == 200, response.text
+            assert response.json()["total_route_delay_logs"] == 500, response.json()
+            print("health (post-ingest):", response.json())
 
-        # 5b. Hourly congestion, region-filtered.
-        r = client.get("/api/regions")
-        assert r.status_code == 200, r.text
-        regions = r.json()
-        print(f"regions: {regions}")
-        if regions:
-            r = client.get("/api/analytics/hourly-congestion", params={"region": regions[0]})
-            assert r.status_code == 200, r.text
-            print(f"hourly-congestion ({regions[0]}): {len(r.json())} buckets")
+            # 4. Stations and route data.
+            response = client.get("/api/stations")
+            assert response.status_code == 200, response.text
+            print(f"stations: {len(response.json())} rows")
 
-        # 5c. Dashboard KPIs.
-        r = client.get("/api/dashboard/kpis")
-        assert r.status_code == 200, r.text
-        print("dashboard kpis:", r.json())
+            response = client.get(
+                "/api/routes/delays", params={"train_category": "RE", "limit": 5}
+            )
+            assert response.status_code == 200, response.text
+            print(f"routes/delays (RE): {len(response.json())} rows")
 
-        # 5d. Dashboard HTML page renders.
-        r = client.get("/")
-        assert r.status_code == 200, r.text
-        assert "Transit Intelligence" in r.text
-        assert "hourly-chart" in r.text
-        print(f"dashboard page: {len(r.text)} bytes rendered")
+            # 5. Analytics and region filtering.
+            for endpoint in (
+                "/api/analytics/hourly-congestion",
+                "/api/analytics/weekly-reliability",
+                "/api/analytics/route-blocks",
+                "/api/analytics/semester-ticket",
+                "/api/dashboard/kpis",
+                "/api/regions",
+            ):
+                response = client.get(endpoint)
+                assert response.status_code == 200, f"{endpoint}: {response.text}"
 
-        if regions:
-            r = client.get("/", params={"region": regions[0]})
-            assert r.status_code == 200, r.text
-            print(f"dashboard page (region={regions[0]}): OK")
+            categories = {
+                row["train_category"]
+                for row in client.get("/api/analytics/semester-ticket").json()
+            }
+            assert categories.issubset({"RE", "RB", "S_BAHN"}), categories
 
-        # 6. Weekly reliability.
-        r = client.get("/api/analytics/weekly-reliability")
-        assert r.status_code == 200, r.text
-        print(f"weekly-reliability: {len(r.json())} buckets, sample: {r.json()[:1]}")
+            regions = client.get("/api/regions").json()
+            if regions:
+                response = client.get(
+                    "/api/analytics/hourly-congestion", params={"region": regions[0]}
+                )
+                assert response.status_code == 200, response.text
+                response = client.get("/", params={"region": regions[0]})
+                assert response.status_code == 200, response.text
 
-        # 7. Route blocks.
-        r = client.get("/api/analytics/route-blocks")
-        assert r.status_code == 200, r.text
-        print(f"route-blocks: {len(r.json())} rows, sample: {r.json()[:1]}")
+            # 6. Dashboard HTML and JSON 404 envelope.
+            response = client.get("/")
+            assert response.status_code == 200, response.text
+            assert "Transit Intelligence" in response.text
+            assert "hourly-chart" in response.text
 
-        # 8. Semester ticket optimizer -- verify no ICE/IC leaks through.
-        r = client.get("/api/analytics/semester-ticket")
-        assert r.status_code == 200, r.text
-        categories = {row["train_category"] for row in r.json()}
-        assert categories.issubset({"RE", "RB", "S_BAHN"}), categories
-        print(f"semester-ticket: {len(r.json())} rows, categories: {categories}")
+            response = client.get("/api/does-not-exist")
+            assert response.status_code == 404, response.text
+            assert "timestamp" in response.json() and "path" in response.json()
 
-        # 9. 404 handler.
-        r = client.get("/api/does-not-exist")
-        assert r.status_code == 404, r.text
-        body = r.json()
-        assert "timestamp" in body and "path" in body
-        print("404 handler:", body)
-
-        print("\nAll smoke tests passed.")
+            print("\nAll smoke tests passed. Temporary database will now be removed.")
 
 
 if __name__ == "__main__":
