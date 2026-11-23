@@ -6,12 +6,13 @@ ingestion engine, and global 404/500 exception interceptors that return
 structured JSON error envelopes with a server runtime timestamp.
 """
 
+import hmac
 import os
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -50,6 +51,27 @@ _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(_APP_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(_APP_DIR, "static")), name="static")
 
+
+async def require_admin_key(x_admin_api_key: str | None = Header(default=None)) -> None:
+    """Protect ingestion endpoints in deployed environments.
+
+    Local development remains convenient when ENVIRONMENT is not production.
+    In production, ingestion is disabled until ADMIN_API_KEY is configured.
+    """
+    expected_key = os.getenv("ADMIN_API_KEY")
+    is_production = os.getenv("ENVIRONMENT", "").lower() == "production"
+
+    if not expected_key:
+        if is_production:
+            raise HTTPException(
+                status_code=503,
+                detail="Ingestion is disabled: ADMIN_API_KEY is not configured.",
+            )
+        return
+
+    if not x_admin_api_key or not hmac.compare_digest(x_admin_api_key, expected_key):
+        raise HTTPException(status_code=401, detail="A valid X-Admin-API-Key header is required.")
+
 # ---------------------------------------------------------------------------
 # Sample regional network used by the dummy-data ingestion engine. Each route
 # lists the train categories that plausibly run it, so long-distance corridors
@@ -71,6 +93,7 @@ SAMPLE_ROUTES: list[tuple[str, str, list[TrainCategory]]] = [
 
 REGION_MAP: dict[str, str] = {
     "Hamburg Hbf": "Norddeutschland",
+    "Hamburg-Altona": "Norddeutschland",
     "Lübeck Hbf": "Norddeutschland",
     "Bremen Hbf": "Norddeutschland",
     "Hannover Hbf": "Niedersachsen",
@@ -100,7 +123,6 @@ def _generate_dummy_rows(num_records: int) -> list[dict]:
         origin, destination, categories = random.choice(SAMPLE_ROUTES)
         category = random.choice(categories)
 
-        day_of_week = random.randint(0, 6)
         # Bias sampling toward peak hours so congestion-slot analytics has
         # meaningful signal, while still covering the full 24h range.
         hour_of_day = random.choice(
@@ -133,7 +155,7 @@ def _generate_dummy_rows(num_records: int) -> list[dict]:
                 "scheduled_departure": scheduled,
                 "actual_departure": actual,
                 "delay_seconds": delay_seconds,
-                "day_of_week": day_of_week,
+                "day_of_week": scheduled.weekday(),
                 "hour_of_day": hour_of_day,
             }
         )
@@ -186,7 +208,11 @@ async def dashboard(request: Request, region: str | None = Query(default=None), 
 # =============================================================================
 
 @app.post("/api/ingest/batch", response_model=IngestBatchResponse, status_code=202)
-async def ingest_batch(payload: IngestBatchRequest, background_tasks: BackgroundTasks):
+async def ingest_batch(
+    payload: IngestBatchRequest,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(require_admin_key),
+):
     """
     Queues a background worker that populates route_delay_logs with realistic
     sample data (e.g. "Hamburg -> Lübeck", "Bremen -> Hannover") and then
@@ -211,7 +237,11 @@ async def ingest_batch(payload: IngestBatchRequest, background_tasks: Background
 
 
 @app.post("/api/ingest/live", response_model=IngestLiveResponse, status_code=202)
-async def ingest_live(payload: IngestLiveRequest, background_tasks: BackgroundTasks):
+async def ingest_live(
+    payload: IngestLiveRequest,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(require_admin_key),
+):
     """
     Queues a background worker that fetches *real* upcoming RE/RB departures
     from the public db.transport.rest wrapper around Deutsche Bahn's HAFAS
@@ -243,7 +273,7 @@ async def ingest_live(payload: IngestLiveRequest, background_tasks: BackgroundTa
 
         async with AsyncSessionLocal() as db:
             created, updated = await crud.upsert_route_delay_logs_by_trip_id(db, rows)
-            await analytics.refresh_station_aggregates(db)
+            await analytics.refresh_station_aggregates(db, region_map=REGION_MAP)
             print(f"[ingest_live] created={created} updated={updated}")
 
     background_tasks.add_task(job)
