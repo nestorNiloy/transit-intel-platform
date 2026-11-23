@@ -74,7 +74,6 @@
   .row-divider { border-bottom: 1px solid var(--panel-border); }
   .row-divider:last-child { border-bottom: none; }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
 <body class="text-[#E7ECF0] min-h-screen pb-16">
@@ -192,6 +191,13 @@
 
   const initialHourly = {{ hourly | tojson }};
 
+  // Escape untrusted API strings before inserting them into HTML templates.
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[char]);
+  }
+
   function reliabilityBadgeClass(score) {
     if (score > 90) return 'badge-green';
     if (score >= 75) return 'badge-yellow';
@@ -217,7 +223,7 @@
     flipUpdate(document.getElementById('kpi-best-route'), () => {
       const el = document.getElementById('kpi-best-route');
       el.innerHTML = kpis.best_route
-        ? `${kpis.best_route.origin_station} → ${kpis.best_route.destination_station}
+        ? `${escapeHtml(kpis.best_route.origin_station)} → ${escapeHtml(kpis.best_route.destination_station)}
            <span class="block text-sm text-[#34D399] mt-1">${kpis.best_route.on_time_rate_pct}% on-time</span>`
         : `<span class="text-[#8B98A5] text-sm">Not enough data yet</span>`;
     });
@@ -227,7 +233,7 @@
       if (kpis.same_route_only) {
         el.innerHTML = `<span class="text-[#8B98A5] text-sm font-sans normal-case tracking-normal">Only one route with enough trips in this window — same as "most reliable".</span>`;
       } else if (kpis.worst_route) {
-        el.innerHTML = `${kpis.worst_route.origin_station} → ${kpis.worst_route.destination_station}
+        el.innerHTML = `${escapeHtml(kpis.worst_route.origin_station)} → ${escapeHtml(kpis.worst_route.destination_station)}
            <span class="block text-sm text-[#F0475B] mt-1">${kpis.worst_route.on_time_rate_pct}% on-time</span>`;
       } else {
         el.innerHTML = `<span class="text-[#8B98A5] text-sm">Not enough data yet</span>`;
@@ -239,7 +245,7 @@
       if (kpis.peak_congestion_hour !== null && kpis.peak_congestion_hour !== undefined) {
         const hh = String(kpis.peak_congestion_hour).padStart(2, '0');
         const slot = (kpis.peak_congestion_slot || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        el.innerHTML = `${hh}:00<span class="block text-sm text-[#8B98A5] mt-1 font-sans normal-case tracking-normal">${slot}</span>`;
+        el.innerHTML = `${hh}:00<span class="block text-sm text-[#8B98A5] mt-1 font-sans normal-case tracking-normal">${escapeHtml(slot)}</span>`;
       } else {
         el.innerHTML = `<span class="text-[#8B98A5] text-sm">Not enough data yet</span>`;
       }
@@ -254,7 +260,7 @@
     }
     tbody.innerHTML = stations.map(s => `
       <tr class="row-divider hover:bg-white/[0.02]">
-        <td class="px-5 py-2.5">${s.station_name}</td>
+        <td class="px-5 py-2.5">${escapeHtml(s.station_name)}</td>
         <td class="px-3 py-2.5 text-right font-data">${s.total_tracked_trips}</td>
         <td class="px-3 py-2.5 text-right font-data">${s.average_delay_minutes} min</td>
         <td class="px-3 py-2.5 text-right pr-5"><span class="badge ${reliabilityBadgeClass(s.reliability_score)}">${s.reliability_score}%</span></td>

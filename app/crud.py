@@ -11,7 +11,7 @@ aggregate rows.
 from datetime import datetime
 from typing import Optional, Sequence
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import RouteDelayLog, StationMetric, TrainCategory
@@ -91,6 +91,7 @@ async def upsert_station_metrics_from_logs(
             station.total_tracked_trips = row.total_trips
             station.average_delay_minutes = round(avg_delay_minutes, 2)
             station.reliability_score = round(reliability, 2)
+            station.region = region_map.get(row.station_name, station.region)
         else:
             db.add(
                 StationMetric(
@@ -102,6 +103,15 @@ async def upsert_station_metrics_from_logs(
                 )
             )
         updated += 1
+
+    # Remove aggregates for stations that no longer have source log records.
+    current_station_names = [row.station_name for row in rows]
+    if current_station_names:
+        await db.execute(
+            delete(StationMetric).where(~StationMetric.station_name.in_(current_station_names))
+        )
+    else:
+        await db.execute(delete(StationMetric))
 
     await db.commit()
     return updated
