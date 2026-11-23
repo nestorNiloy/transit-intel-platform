@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app import crud
 from app.main import REGION_MAP, _generate_dummy_rows
-from app.models import Base, RouteDelayLog, StationMetric
+from app.models import Base, RouteDelayLog, StationMetric, TrainCategory
 
 
 def test_generated_weekday_matches_scheduled_departure() -> None:
@@ -28,7 +28,7 @@ def test_station_aggregate_refresh_removes_orphans_and_applies_region() -> None:
                 RouteDelayLog(
                     origin_station="Hamburg-Altona",
                     destination_station="Lübeck Hbf",
-                    train_category="RE",
+                    train_category=TrainCategory.RE,
                     scheduled_departure=datetime(2026, 1, 5, 8, 0),
                     actual_departure=datetime(2026, 1, 5, 8, 2),
                     delay_seconds=120,
